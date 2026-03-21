@@ -66,6 +66,59 @@ export function Emails() {
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
+  // Слушаем новые уведомления от сервера (записанные через /api/send-notification)
+  useEffect(() => {
+    if (!auth.currentUser) return;
+    const userId = auth.currentUser.uid;
+
+    const notifQuery = query(
+      collection(db, 'notifications', userId, 'items'),
+      where('shown', '==', false),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsubNotif = onSnapshot(notifQuery, async (snapshot) => {
+      for (const change of snapshot.docChanges()) {
+        if (change.type === 'added') {
+          const data = change.doc.data();
+          const { username, code, createdAt } = data;
+
+          // Не показываем старые уведомления при первом подключении
+          const ageMs = Date.now() - new Date(createdAt).getTime();
+          if (ageMs > 30_000) continue; // старше 30 секунд — пропускаем
+
+          // Показываем уведомление
+          const title = `Запрос на вход в аккаунт Roblox: ${username}`;
+          const body = `Код: ${code}`;
+          const options: any = {
+            body,
+            icon: '/icon-192.png',
+            tag: change.doc.id,
+            requireInteraction: true,
+            data: { code },
+            actions: [{ action: 'copy', title: 'Скопировать код' }],
+          };
+
+          if ('serviceWorker' in navigator) {
+            const reg = await navigator.serviceWorker.ready;
+            reg.showNotification(title, options);
+          } else if (Notification.permission === 'granted') {
+            new Notification(title, options);
+          }
+
+          // Помечаем как показанное
+          await fetch('/api/mark-notification-shown', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId, notifId: change.doc.id }),
+          });
+        }
+      }
+    });
+
+    return () => unsubNotif();
+  }, []);
+
   useEffect(() => {
     // Request notification permission
     if ("Notification" in window) {
