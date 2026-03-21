@@ -1,0 +1,45 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user profile information including Roblox nickname.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "description": "User's registered email" },
+        "robloxNickname": { "type": "string", "description": "User's Roblox nickname" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "googleAccessToken": { "type": "string", "description": "Google OAuth access token" },
+        "googleRefreshToken": { "type": "string", "description": "Google OAuth refresh token" },
+        "googleTokenExpiry": { "type": "number", "description": "Google OAuth token expiry timestamp" },
+        "googleConnectedAt": { "type": "string", "format": "date-time", "description": "When Google account was connected" }
+      },
+      "required": ["uid", "email", "robloxNickname"]
+    },
+    "Email": {
+      "title": "Roblox Email",
+      "description": "Emails received from accounts@roblox.com matching the user's nickname.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string", "description": "UID of the recipient user" },
+        "from": { "type": "string", "enum": ["accounts@roblox.com"] },
+        "subject": { "type": "string" },
+        "body": { "type": "string" },
+        "receivedAt": { "type": "string", "format": "date-time" },
+        "isRead": { "type": "boolean" }
+      },
+      "required": ["userId", "from", "subject", "body", "receivedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Individual user profiles."
+    },
+    "/emails/{emailId}": {
+      "schema": "Email",
+      "description": "Tracked emails from Roblox."
+    }
+  }
+}

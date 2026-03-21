@@ -1,0 +1,5 @@
+{
+  "name": "Roblox2FA",
+  "description": "A secure 2FA dashboard for Roblox accounts that tracks emails from accounts@roblox.com matching your nickname.",
+  "requestFramePermissions": []
+}
