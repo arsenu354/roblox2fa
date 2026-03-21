@@ -309,8 +309,25 @@ export function Emails() {
       await Promise.all(savePromises);
       
       if (newEmailsFound.length > 0 && !isInitialSync) {
-        // Show notification for the most recent one
-        showNotification(newEmailsFound[0]);
+        const email = newEmailsFound[0];
+        const code = extractCode(email.body);
+        const currentProfile = userProfileRef.current;
+
+        // Показываем браузерное уведомление
+        showNotification(email);
+
+        // Записываем в Firestore через сервер — WorkManager на Android подхватит
+        if (code && auth.currentUser && currentProfile?.robloxNickname) {
+          fetch('/api/send-notification', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId: auth.currentUser.uid,
+              username: currentProfile.robloxNickname,
+              code: code
+            })
+          }).catch(console.error);
+        }
       }
 
     } catch (err: any) {
