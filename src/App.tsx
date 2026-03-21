@@ -18,7 +18,11 @@ async function saveFcmToken(userId: string, token: string, platform: 'android' |
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, token, platform }),
     });
-    console.log(`[FCM] Token сохранён (${platform})`);
+    // Передаём userId обратно в Android чтобы WorkManager знал кто залогинен
+    if ((window as any).AndroidBridge) {
+      (window as any).AndroidBridge.saveUserId(userId);
+    }
+    console.log(`[FCM] Token сохранён (${platform}), userId: ${userId}`);
   } catch (e) {
     console.error('[FCM] Ошибка сохранения token:', e);
   }
@@ -35,6 +39,12 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUser(user);
       setLoading(false);
+
+      // Как только получили юзера — сразу передаём userId в Android
+      if (user && (window as any).AndroidBridge) {
+        (window as any).AndroidBridge.saveUserId(user.uid);
+        console.log('[FCM] userId передан в Android при auth:', user.uid);
+      }
     });
     return () => unsubscribe();
   }, []);
