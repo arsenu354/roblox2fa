@@ -1,48 +1,18 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Helper Functions
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-    
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-    
-    function isValidUser(data) {
-      return data.uid is string &&
-             data.email is string &&
-             data.robloxNickname is string &&
-             data.robloxNickname.size() > 0 &&
-             data.robloxNickname.size() < 50;
-    }
-
-    function isValidEmail(data) {
-      return data.keys().hasAll(['userId', 'from', 'subject', 'body', 'receivedAt']) &&
-             data.userId is string &&
-             data.from is string &&
-             data.subject is string &&
-             data.body is string &&
-             data.receivedAt is string &&
-             (!('isRead' in data) || data.isRead is bool) &&
-             (!('gmailId' in data) || data.gmailId is string);
-    }
-
-    // User Profiles
     match /users/{userId} {
-      allow read, write: if true;
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
-
-    // Emails
     match /emails/{emailId} {
-      allow read, write: if true;
+      allow read, write: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
     }
-
-    // Test connection
-    match /test/connection {
-      allow read: if true;
+    match /notifications/{userId}/items/{itemId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    match /fcmTokens/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
   }
 }
