@@ -308,25 +308,31 @@ export function Emails() {
 
       await Promise.all(savePromises);
       
-      if (newEmailsFound.length > 0 && !isInitialSync) {
+      if (newEmailsFound.length > 0) {
         const email = newEmailsFound[0];
         const code = extractCode(email.body);
         const currentProfile = userProfileRef.current;
 
-        // Показываем браузерное уведомление
-        showNotification(email);
+        // Проверяем возраст письма — уведомляем только если свежее 5 минут
+        const emailAge = Date.now() - new Date(email.receivedAt).getTime();
+        const isFresh = emailAge < 5 * 60 * 1000;
 
-        // Записываем в Firestore через сервер — WorkManager на Android подхватит
-        if (code && auth.currentUser && currentProfile?.robloxNickname) {
-          fetch('/api/send-notification', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              userId: auth.currentUser.uid,
-              username: currentProfile.robloxNickname,
-              code: code
-            })
-          }).catch(console.error);
+        if (isFresh) {
+          // Показываем браузерное уведомление
+          showNotification(email);
+
+          // Записываем в Firestore → WorkManager подхватит на Android
+          if (code && auth.currentUser && currentProfile?.robloxNickname) {
+            fetch('/api/send-notification', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                userId: auth.currentUser.uid,
+                username: currentProfile.robloxNickname,
+                code: code
+              })
+            }).catch(console.error);
+          }
         }
       }
 

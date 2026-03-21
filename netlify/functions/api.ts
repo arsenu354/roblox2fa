@@ -10,7 +10,18 @@ const PROJECT_ID = 'project-9e35b839-f404-4a58-ae2';
 const DB_ID = 'ai-studio-e2d53176-9f05-45e7-bb6c-d7bf3e802157';
 const FIRESTORE_URL = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/${DB_ID}/documents`;
 
-// ─── Firestore REST helpers ──────────────────────────────────────────────────
+// ─── Firestore REST helpers ───────────────────────────────────────────────────
+
+async function firestoreGet(collection: string, docId: string) {
+  const url = `${FIRESTORE_URL}/${collection}/${docId}?key=${FIREBASE_API_KEY}`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  return res.json();
+}
+
+// Алиас для совместимости
+const getFirestoreDoc = firestoreGet;
+
 async function firestoreSet(collection: string, docId: string, data: Record<string, any>) {
   const fields: Record<string, any> = {};
   for (const [k, v] of Object.entries(data)) {
@@ -27,17 +38,9 @@ async function firestoreSet(collection: string, docId: string, data: Record<stri
   return res.json();
 }
 
-async function firestoreGet(collection: string, docId: string) {
-  const url = `${FIRESTORE_URL}/${collection}/${docId}?key=${FIREBASE_API_KEY}`;
-  const res = await fetch(url);
-  if (!res.ok) return null;
-  return res.json();
-}
-
-// Добавить уведомление в subcollection notifications/{userId}/items
-async function addNotification(userId: string, username: string, code: string) {
-  const notifId = Date.now().toString();
-  const url = `${FIRESTORE_URL}/notifications/${userId}/items/${notifId}?key=${FIREBASE_API_KEY}`;
+async function addNotification(userId: string, username: string, code: string, notifId?: string) {
+  const id = notifId || Date.now().toString();
+  const url = `${FIRESTORE_URL}/notifications/${userId}/items/${id}?key=${FIREBASE_API_KEY}`;
   await fetch(url, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -50,10 +53,11 @@ async function addNotification(userId: string, username: string, code: string) {
       }
     }),
   });
-  console.log(`Уведомление записано в Firestore: ${userId} → ${username} код ${code}`);
+  console.log(`Уведомление записано: ${userId} → ${username} код ${code}`);
 }
 
 // ─── Express ──────────────────────────────────────────────────────────────────
+
 const app = express();
 app.use(express.json());
 
@@ -91,12 +95,13 @@ app.get('/auth/google/callback', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/save-fcm-token (оставляем для Android)
+// POST /api/save-fcm-token
 app.post('/api/save-fcm-token', async (req: Request, res: Response) => {
   const { userId, token, platform } = req.body;
   if (!userId || !token) return res.status(400).json({ error: 'Missing fields' });
   try {
-    await firestoreSet(`fcmTokens`, userId, { [platform]: token, updatedAt: new Date().toISOString() });
+    await firestoreSet('fcmTokens', userId, { [platform]: token, updatedAt: new Date().toISOString() });
+    console.log(`FCM token сохранён: ${userId} (${platform})`);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed' });
@@ -111,7 +116,87 @@ app.post('/api/send-notification', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-// GET /api/check-notifications — Android поллинг (когда приложение закрыто)
+// GET /api/gmail/sync-background — WorkManager вызывает это когда приложение закрыто
+app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+
+  try {
+    // Берём данные юзера из Firestore
+    const userDoc = await getFirestoreDoc('users', userId as string);
+    if (!userDoc?.fields) return res.json({ ok: true, message: 'No user data' });
+
+    const f = userDoc.fields;
+    const accessToken = f?.googleAccessToken?.stringValue;
+    const refreshToken = f?.googleRefreshToken?.stringValue;
+    const expiryDate = f?.googleTokenExpiry?.integerValue;
+    const robloxNickname = f?.robloxNickname?.stringValue;
+    const notificationsEnabled = f?.notificationsEnabled?.booleanValue;
+
+    if (!accessToken || !robloxNickname || !notificationsEnabled) {
+      return res.json({ ok: true, message: 'Notifications disabled or no gmail' });
+    }
+
+    // Настраиваем Gmail клиент
+    const client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET
+    );
+    client.setCredentials({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expiry_date: expiryDate ? parseInt(expiryDate) : undefined,
+    });
+
+    const gmail = google.gmail({ version: 'v1', auth: client });
+
+    // Ищем письма за последние 20 минут
+    const after = Math.floor((Date.now() - 20 * 60 * 1000) / 1000);
+    const response = await gmail.users.messages.list({
+      userId: 'me',
+      q: `from:accounts@roblox.com ${robloxNickname} after:${after}`,
+      maxResults: 3,
+    });
+
+    const messages = response.data.messages || [];
+    if (messages.length === 0) return res.json({ ok: true, message: 'No new emails' });
+
+    for (const msg of messages) {
+      const details = await gmail.users.messages.get({ userId: 'me', id: msg.id! });
+      const payload = details.data.payload;
+      let body = '';
+
+      const dec = (d: string) => Buffer.from(d.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString();
+      if (payload?.parts) {
+        const p = payload.parts.find((p: any) => p.mimeType === 'text/plain') || payload.parts[0];
+        if (p?.body?.data) body = dec(p.body.data);
+      } else if (payload?.body?.data) {
+        body = dec(payload.body.data);
+      }
+
+      // Извлекаем 6-значный код
+      const codeMatch = body.match(/\b\d{6}\b/);
+      if (!codeMatch) continue;
+      const code = codeMatch[0];
+
+      // Проверяем не отправляли ли уже это уведомление
+      const notifId = `gmail_${msg.id}`;
+      const existing = await getFirestoreDoc(`notifications/${userId}/items`, notifId);
+      if (existing && !existing.error) continue; // уже отправляли
+
+      // Записываем в Firestore
+      await addNotification(userId as string, robloxNickname, code, notifId);
+      console.log(`Background sync: уведомление записано для ${userId}, код ${code}`);
+    }
+
+    res.json({ ok: true, synced: messages.length });
+  } catch (err) {
+    console.error('gmail/sync-background error:', err);
+    res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// GET /api/check-notifications — Android WorkManager читает отсюда
 app.get('/api/check-notifications', async (req: Request, res: Response) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
@@ -172,16 +257,23 @@ app.post('/api/gmail/fetch', async (req: Request, res: Response) => {
         const details = await gmail.users.messages.get({ userId: 'me', id: msg.id! });
         const payload = details.data.payload;
         const headers = payload?.headers;
-        const subject = headers?.find(h => h.name === 'Subject')?.value || 'Без темы';
-        const from = headers?.find(h => h.name === 'From')?.value || 'Неизвестно';
-        const date = headers?.find(h => h.name === 'Date')?.value || new Date().toISOString();
+        const subject = headers?.find((h: any) => h.name === 'Subject')?.value || 'Без темы';
+        const from = headers?.find((h: any) => h.name === 'From')?.value || 'Неизвестно';
+        const date = headers?.find((h: any) => h.name === 'Date')?.value || new Date().toISOString();
         const dec = (d: string) => Buffer.from(d.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString();
         let body = '';
         if (payload?.parts) {
-          let p = payload.parts.find(p => p.mimeType === 'text/plain') || payload.parts[0];
+          const p = payload.parts.find((p: any) => p.mimeType === 'text/plain') || payload.parts[0];
           if (p?.body?.data) body = dec(p.body.data);
         } else if (payload?.body?.data) body = dec(payload.body.data);
-        return { id: msg.id, from, subject, body: body.replace(/<[^>]*>?/gm, '').trim().substring(0, 1000), receivedAt: new Date(date).toISOString(), isRead: !details.data.labelIds?.includes('UNREAD') };
+        return {
+          id: msg.id,
+          from,
+          subject,
+          body: body.replace(/<[^>]*>?/gm, '').trim().substring(0, 1000),
+          receivedAt: new Date(date).toISOString(),
+          isRead: !details.data.labelIds?.includes('UNREAD'),
+        };
       } catch { return null; }
     }));
     res.json({ emails: emailData.filter(Boolean) });
