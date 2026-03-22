@@ -6,7 +6,6 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// ─── Firebase Admin ───────────────────────────────────────────────────────────
 if (!admin.apps.length) {
   try {
     const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
@@ -18,8 +17,6 @@ if (!admin.apps.length) {
 }
 
 const db = admin.firestore();
-
-// ─── Firestore helpers через Admin SDK ───────────────────────────────────────
 
 async function getDoc(collection: string, docId: string) {
   try {
@@ -53,15 +50,12 @@ async function addNotification(userId: string, username: string, code: string, n
   console.log(`Уведомление: ${userId} → ${username} код ${code}`);
 }
 
-// ─── FCM Push ─────────────────────────────────────────────────────────────────
-
 async function sendFcmPush(userId: string, username: string, code: string) {
   if (!admin.apps.length) return;
   try {
     const tokenData = await getDoc('fcmTokens', userId);
     const androidToken = tokenData?.android;
     if (!androidToken) { console.log('FCM токен не найден для:', userId); return; }
-
     const result = await admin.messaging().send({
       token: androidToken,
       data: { title: `Запрос на вход: ${username}`, body: `Код: ${code}`, code: String(code), username, type: 'roblox_code' },
@@ -72,8 +66,6 @@ async function sendFcmPush(userId: string, username: string, code: string) {
     console.error('FCM error:', err?.message);
   }
 }
-
-// ─── Express ──────────────────────────────────────────────────────────────────
 
 const app = express();
 app.use(express.json());
@@ -101,7 +93,6 @@ app.get('/auth/google/callback', async (req: Request, res: Response) => {
   try {
     const { tokens } = await oauth2Client.getToken(code as string);
     const userId = state as string;
-
     if (userId && userId.length > 5) {
       await setDoc('users', userId, {
         googleAccessToken: tokens.access_token || '',
@@ -110,7 +101,6 @@ app.get('/auth/google/callback', async (req: Request, res: Response) => {
       });
       console.log(`✅ Gmail токены сохранены для: ${userId}`);
     }
-
     res.send(`
       <html><head><title>Roblox2FA</title>
       <style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f4f4f5}.card{background:white;padding:2rem;border-radius:1rem;text-align:center}</style>
@@ -178,11 +168,17 @@ app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
     const client = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
     client.setCredentials({ access_token: accessToken, refresh_token: refreshToken, expiry_date: expiryDate ? parseInt(expiryDate) : undefined });
     const gmail = google.gmail({ version: 'v1', auth: client });
+
     const after = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
-    const response = await gmail.users.messages.list({ userId: 'me', q: `from:accounts@roblox.com ${robloxNickname} after:${after}`, maxResults: 3 });
+    const response = await gmail.users.messages.list({
+      userId: 'me',
+      q: `from:accounts@roblox.com after:${after}`,
+      maxResults: 10
+    });
     const messages = response.data.messages || [];
     if (messages.length === 0) return res.json({ ok: true, message: 'No new emails' });
 
+    let synced = 0;
     for (const msg of messages) {
       const details = await gmail.users.messages.get({ userId: 'me', id: msg.id! });
       const payload = details.data.payload;
@@ -197,13 +193,14 @@ app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
       if (!codeMatch) continue;
       const code = codeMatch[0];
       const notifId = `gmail_${msg.id}`;
-      // Проверяем существование через admin sdk напрямую
+
+      // Проверяем дубликат
       const existingNotif = await db.collection('notifications').doc(userId as string)
         .collection('items').doc(notifId).get();
       if (existingNotif.exists) continue;
 
-      // Сохраняем в коллекцию emails для отображения в приложении
-      const headers = details.data.payload?.headers;
+      // Сохраняем email в Firestore
+      const headers = payload?.headers;
       const subject = headers?.find((h: any) => h.name === 'Subject')?.value || 'Без темы';
       const from = headers?.find((h: any) => h.name === 'From')?.value || 'accounts@roblox.com';
       const date = headers?.find((h: any) => h.name === 'Date')?.value || new Date().toISOString();
@@ -223,13 +220,9 @@ app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
       console.log(`✅ Email сохранён: ${subject} код ${code}`);
 
       await addNotification(userId as string, robloxNickname, code, notifId);
-
-      const existing = await getDoc(`notifications/${userId}/items`, notifId);
-      if (existing) continue;
-
-      await addNotification(userId as string, robloxNickname, code, notifId);
+      synced++;
     }
-    res.json({ ok: true, synced: messages.length });
+    res.json({ ok: true, synced });
   } catch (err) {
     console.error('sync-background error:', err);
     res.status(500).json({ error: 'Failed' });
@@ -266,11 +259,12 @@ app.post('/api/gmail/fetch', async (req: Request, res: Response) => {
   client.setCredentials({ access_token: accessToken, refresh_token: refreshToken, expiry_date: expiryDate });
   const gmail = google.gmail({ version: 'v1', auth: client });
   try {
-    const response = await gmail.users.messages.list({ 
-        userId: 'me', 
-        q: `from:accounts@roblox.com after:${after}`,  // убери nickname из запроса
-        maxResults: 10 
-      });
+    const fetchAfter = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
+    const response = await gmail.users.messages.list({
+      userId: 'me',
+      q: `from:accounts@roblox.com after:${fetchAfter}`,
+      maxResults: 10
+    });
     const messages = response.data.messages || [];
     const emailData = await Promise.all(messages.map(async (msg) => {
       try {
