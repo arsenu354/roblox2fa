@@ -197,6 +197,32 @@ app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
       if (!codeMatch) continue;
       const code = codeMatch[0];
       const notifId = `gmail_${msg.id}`;
+      // Проверяем существование через admin sdk напрямую
+      const existingNotif = await db.collection('notifications').doc(userId as string)
+        .collection('items').doc(notifId).get();
+      if (existingNotif.exists) continue;
+
+      // Сохраняем в коллекцию emails для отображения в приложении
+      const headers = details.data.payload?.headers;
+      const subject = headers?.find((h: any) => h.name === 'Subject')?.value || 'Без темы';
+      const from = headers?.find((h: any) => h.name === 'From')?.value || 'accounts@roblox.com';
+      const date = headers?.find((h: any) => h.name === 'Date')?.value || new Date().toISOString();
+
+      await db.collection('emails').doc(notifId).set({
+        id: notifId,
+        gmailId: msg.id,
+        userId: userId,
+        from: from,
+        subject: subject,
+        body: body.replace(/<[^>]*>?/gm, '').trim().substring(0, 2000),
+        receivedAt: new Date(date).toISOString(),
+        isRead: false,
+        code: code,
+        createdAt: new Date().toISOString(),
+      });
+      console.log(`✅ Email сохранён: ${subject} код ${code}`);
+
+      await addNotification(userId as string, robloxNickname, code, notifId);
 
       const existing = await getDoc(`notifications/${userId}/items`, notifId);
       if (existing) continue;
