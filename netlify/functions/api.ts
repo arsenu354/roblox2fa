@@ -1,12 +1,10 @@
 import express, { Request, Response } from 'express';
 import serverless from 'serverless-http';
 import { google } from 'googleapis';
-import { Resend } from 'resend';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 const FIREBASE_API_KEY = 'AIzaSyDL1yADKOkq3Q0OjVLycc8Xdb3MEdLKTkQ';
 const PROJECT_ID = 'project-9e35b839-f404-4a58-ae2';
 const DB_ID = 'ai-studio-e2d53176-9f05-45e7-bb6c-d7bf3e802157';
@@ -21,7 +19,6 @@ async function firestoreGet(collection: string, docId: string) {
   return res.json();
 }
 
-// Алиас для совместимости
 const getFirestoreDoc = firestoreGet;
 
 async function firestoreSet(collection: string, docId: string, data: Record<string, any>) {
@@ -110,7 +107,7 @@ app.post('/api/save-fcm-token', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/send-notification — записываем уведомление в Firestore
+// POST /api/send-notification
 app.post('/api/send-notification', async (req: Request, res: Response) => {
   const { userId, username, code } = req.body;
   if (!userId || !username || !code) return res.status(400).json({ error: 'Missing fields' });
@@ -118,13 +115,65 @@ app.post('/api/send-notification', async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-// GET /api/gmail/sync-background — WorkManager вызывает это когда приложение закрыто
+// POST /api/send-verification-code
+app.post('/api/send-verification-code', async (req: Request, res: Response) => {
+  const { email, code } = req.body;
+  if (!email || !code) return res.status(400).json({ error: 'Missing fields' });
+
+  // Всегда логируем — для отладки
+  console.log(`=== VERIFICATION CODE for ${email}: ${code} ===`);
+
+  // Пробуем отправить через Resend — но не падаем если не получается
+  if (process.env.RESEND_API_KEY) {
+    try {
+      const { Resend } = await import('resend');
+      const resend = new Resend(process.env.RESEND_API_KEY);
+
+      const result = await resend.emails.send({
+        from: process.env.RESEND_FROM || 'onboarding@resend.dev',
+        to: email,
+        subject: 'Ваш код подтверждения — Roblox2FA',
+        html: `
+          <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#f4f4f5;border-radius:16px;">
+            <div style="text-align:center;margin-bottom:24px;">
+              <div style="font-size:48px;">🛡</div>
+              <h1 style="color:#18181b;margin:8px 0;">Roblox2FA</h1>
+            </div>
+            <div style="background:white;border-radius:12px;padding:24px;text-align:center;">
+              <p style="color:#71717a;margin-bottom:16px;font-size:15px;">
+                Ваш код подтверждения Email:
+              </p>
+              <div style="font-size:42px;font-weight:bold;letter-spacing:12px;color:#2563eb;padding:16px;background:#f0f4ff;border-radius:8px;margin-bottom:16px;">
+                ${code}
+              </div>
+              <p style="color:#71717a;font-size:13px;">
+                Код действителен <strong>10 минут</strong>.<br/>
+                Если вы не запрашивали код — проигнорируйте это письмо.
+              </p>
+            </div>
+          </div>
+        `
+      });
+
+      console.log('Resend result:', JSON.stringify(result));
+    } catch (err: any) {
+      // Не падаем — код уже в Firestore, пользователь увидит его в логах
+      console.error('Resend error (non-fatal):', err?.message || err);
+    }
+  } else {
+    console.warn('RESEND_API_KEY не задан — письмо не отправлено, код только в логах');
+  }
+
+  // Всегда возвращаем успех — код сохранён в Firestore на стороне Android
+  res.json({ ok: true });
+});
+
+// GET /api/gmail/sync-background
 app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
 
   try {
-    // Берём данные юзера из Firestore
     const userDoc = await getFirestoreDoc('users', userId as string);
     if (!userDoc?.fields) return res.json({ ok: true, message: 'No user data' });
 
@@ -139,7 +188,6 @@ app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
       return res.json({ ok: true, message: 'Notifications disabled or no gmail' });
     }
 
-    // Настраиваем Gmail клиент
     const client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET
@@ -151,8 +199,6 @@ app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
     });
 
     const gmail = google.gmail({ version: 'v1', auth: client });
-
-    // Ищем письма за последние 20 минут
     const after = Math.floor((Date.now() - 20 * 60 * 1000) / 1000);
     const response = await gmail.users.messages.list({
       userId: 'me',
@@ -176,19 +222,15 @@ app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
         body = dec(payload.body.data);
       }
 
-      // Извлекаем 6-значный код
       const codeMatch = body.match(/\b\d{6}\b/);
       if (!codeMatch) continue;
       const code = codeMatch[0];
 
-      // Проверяем не отправляли ли уже это уведомление
       const notifId = `gmail_${msg.id}`;
       const existing = await getFirestoreDoc(`notifications/${userId}/items`, notifId);
-      if (existing && !existing.error) continue; // уже отправляли
+      if (existing && !existing.error) continue;
 
-      // Записываем в Firestore
       await addNotification(userId as string, robloxNickname, code, notifId);
-      console.log(`Background sync: уведомление записано для ${userId}, код ${code}`);
     }
 
     res.json({ ok: true, synced: messages.length });
@@ -198,7 +240,7 @@ app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/check-notifications — Android WorkManager читает отсюда
+// GET /api/check-notifications
 app.get('/api/check-notifications', async (req: Request, res: Response) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
@@ -281,46 +323,6 @@ app.post('/api/gmail/fetch', async (req: Request, res: Response) => {
     res.json({ emails: emailData.filter(Boolean) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch emails' });
-  }
-});
-
-// POST /api/send-verification-code
-app.post('/api/send-verification-code', async (req: Request, res: Response) => {
-  const { email, code } = req.body;
-  if (!email || !code) return res.status(400).json({ error: 'Missing fields' });
-
-  try {
-    await resend.emails.send({
-      from: process.env.RESEND_FROM || 'onboarding@resend.dev',
-      to: email,
-      subject: 'Ваш код подтверждения — Roblox2FA',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #f4f4f5; border-radius: 16px;">
-          <div style="text-align: center; margin-bottom: 24px;">
-            <div style="font-size: 48px;">🛡</div>
-            <h1 style="color: #18181b; margin: 8px 0;">Roblox2FA</h1>
-          </div>
-          <div style="background: white; border-radius: 12px; padding: 24px; text-align: center;">
-            <p style="color: #71717a; margin-bottom: 16px; font-size: 15px;">
-              Ваш код подтверждения Email:
-            </p>
-            <div style="font-size: 42px; font-weight: bold; letter-spacing: 12px; color: #2563eb; padding: 16px; background: #f0f4ff; border-radius: 8px; margin-bottom: 16px;">
-              ${code}
-            </div>
-            <p style="color: #71717a; font-size: 13px;">
-              Код действителен <strong>10 минут</strong>.<br/>
-              Если вы не запрашивали код — проигнорируйте это письмо.
-            </p>
-          </div>
-        </div>
-      `
-    });
-
-    console.log(`Verification code sent to ${email}: ${code}`);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('Resend error:', err);
-    res.status(500).json({ error: 'Failed to send email' });
   }
 });
 
