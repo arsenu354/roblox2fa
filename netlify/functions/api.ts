@@ -121,31 +121,56 @@ app.use(express.json());
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  'com.dedition.robloxtwofa://oauth'  // Deep link redirect
+  `${process.env.APP_URL}/auth/google/callback`
 );
 
 app.get('/api/auth/google/url', (req: Request, res: Response) => {
+  const { userId } = req.query;
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: ['https://www.googleapis.com/auth/gmail.readonly', 'email', 'profile'],
     prompt: 'consent',
+    state: userId as string || '',  // передаём userId
   });
   res.json({ url });
 });
 
 app.get('/auth/google/callback', async (req: Request, res: Response) => {
-  const { code, error } = req.query;
+  const { code, error, state } = req.query;
   if (error) return res.status(400).send(`Ошибка: ${error}`);
   try {
     const { tokens } = await oauth2Client.getToken(code as string);
+    const userId = state as string;
+
+    // Если есть userId — сохраняем токены в Firestore
+    if (userId && userId.length > 5) {
+      await firestoreSet('users', userId, {
+        googleAccessToken: tokens.access_token || '',
+        googleRefreshToken: tokens.refresh_token || '',
+        googleTokenExpiry: tokens.expiry_date ? String(tokens.expiry_date) : '',
+      });
+      console.log(`Gmail токены сохранены для userId: ${userId}`);
+    }
+
     res.send(`
       <html><head><title>Roblox2FA</title>
-      <style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f4f4f5}.card{background:white;padding:2rem;border-radius:1rem;box-shadow:0 4px 6px -1px rgb(0 0 0/0.1);text-align:center}</style>
-      </head><body><div class="card"><h2>Авторизация успешна!</h2></div>
-      <script>setTimeout(()=>{if(window.opener){window.opener.postMessage({type:'GOOGLE_AUTH_SUCCESS',tokens:${JSON.stringify(tokens)}},'*');setTimeout(()=>window.close(),500)}else{window.location.href='/'}},1000)</script>
+      <style>
+        body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f4f4f5}
+        .card{background:white;padding:2rem;border-radius:1rem;box-shadow:0 4px 6px -1px rgb(0 0 0/0.1);text-align:center;max-width:400px}
+        .icon{font-size:64px;margin-bottom:1rem}
+        h2{color:#18181b;margin:0 0 0.5rem}
+        p{color:#71717a}
+      </style>
+      </head><body>
+      <div class="card">
+        <div class="icon">✅</div>
+        <h2>Gmail подключён!</h2>
+        <p>Вернитесь в приложение Roblox2FA и нажмите<br><strong>"↻ Обновить статус"</strong></p>
+      </div>
       </body></html>
     `);
   } catch (err) {
+    console.error('OAuth callback error:', err);
     res.status(500).send('Ошибка авторизации.');
   }
 });
