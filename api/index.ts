@@ -76,6 +76,16 @@ const oauth2Client = new google.auth.OAuth2(
   `${process.env.APP_URL}/auth/google/callback`
 );
 
+const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
+
+if (!serviceAccount) {
+  throw new Error("FIREBASE_SERVICE_ACCOUNT is missing");
+}
+
+admin.initializeApp({
+  credential: admin.credential.cert(JSON.parse(serviceAccount)),
+});
+
 app.get('/api/auth/google/url', (req: Request, res: Response) => {
   const { userId } = req.query;
   const url = oauth2Client.generateAuthUrl({
