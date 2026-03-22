@@ -1,10 +1,12 @@
 import express, { Request, Response } from 'express';
 import serverless from 'serverless-http';
 import { google } from 'googleapis';
+import { Resend } from 'resend';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
+const resend = new Resend(process.env.RESEND_API_KEY);
 const FIREBASE_API_KEY = 'AIzaSyDL1yADKOkq3Q0OjVLycc8Xdb3MEdLKTkQ';
 const PROJECT_ID = 'project-9e35b839-f404-4a58-ae2';
 const DB_ID = 'ai-studio-e2d53176-9f05-45e7-bb6c-d7bf3e802157';
@@ -288,16 +290,37 @@ app.post('/api/send-verification-code', async (req: Request, res: Response) => {
   if (!email || !code) return res.status(400).json({ error: 'Missing fields' });
 
   try {
-    // Используем Gmail API для отправки через аккаунт из env
-    // Простой способ — через nodemailer или просто логируем
-    // Для демо — записываем в Firestore и выводим в логи
-    console.log(`Verification code for ${email}: ${code}`);
+    await resend.emails.send({
+      from: process.env.RESEND_FROM || 'onboarding@resend.dev',
+      to: email,
+      subject: 'Ваш код подтверждения — Roblox2FA',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #f4f4f5; border-radius: 16px;">
+          <div style="text-align: center; margin-bottom: 24px;">
+            <div style="font-size: 48px;">🛡</div>
+            <h1 style="color: #18181b; margin: 8px 0;">Roblox2FA</h1>
+          </div>
+          <div style="background: white; border-radius: 12px; padding: 24px; text-align: center;">
+            <p style="color: #71717a; margin-bottom: 16px; font-size: 15px;">
+              Ваш код подтверждения Email:
+            </p>
+            <div style="font-size: 42px; font-weight: bold; letter-spacing: 12px; color: #2563eb; padding: 16px; background: #f0f4ff; border-radius: 8px; margin-bottom: 16px;">
+              ${code}
+            </div>
+            <p style="color: #71717a; font-size: 13px;">
+              Код действителен <strong>10 минут</strong>.<br/>
+              Если вы не запрашивали код — проигнорируйте это письмо.
+            </p>
+          </div>
+        </div>
+      `
+    });
 
-    // Если есть nodemailer — можно отправить настоящий email
-    // Пока что пишем в Firestore как "pending notification"
-    res.json({ ok: true, message: `Code sent to ${email}` });
+    console.log(`Verification code sent to ${email}: ${code}`);
+    res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: 'Failed' });
+    console.error('Resend error:', err);
+    res.status(500).json({ error: 'Failed to send email' });
   }
 });
 
