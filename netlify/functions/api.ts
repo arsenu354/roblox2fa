@@ -1,12 +1,12 @@
 import express, { Request, Response } from 'express';
 import serverless from 'serverless-http';
 import { google } from 'googleapis';
-import * as admin from 'firebase-admin';
+import admin from 'firebase-admin';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-if (!admin.apps.length) {
+if (!admin.apps || admin.apps.length === 0) {
   try {
     const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
     admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
