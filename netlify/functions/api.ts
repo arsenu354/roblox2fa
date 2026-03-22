@@ -178,7 +178,7 @@ app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
     const client = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
     client.setCredentials({ access_token: accessToken, refresh_token: refreshToken, expiry_date: expiryDate ? parseInt(expiryDate) : undefined });
     const gmail = google.gmail({ version: 'v1', auth: client });
-    const after = Math.floor((Date.now() - 20 * 60 * 1000) / 1000);
+    const after = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
     const response = await gmail.users.messages.list({ userId: 'me', q: `from:accounts@roblox.com ${robloxNickname} after:${after}`, maxResults: 3 });
     const messages = response.data.messages || [];
     if (messages.length === 0) return res.json({ ok: true, message: 'No new emails' });
@@ -266,7 +266,11 @@ app.post('/api/gmail/fetch', async (req: Request, res: Response) => {
   client.setCredentials({ access_token: accessToken, refresh_token: refreshToken, expiry_date: expiryDate });
   const gmail = google.gmail({ version: 'v1', auth: client });
   try {
-    const response = await gmail.users.messages.list({ userId: 'me', q: `from:accounts@roblox.com ${robloxNickname}`, maxResults: 10 });
+    const response = await gmail.users.messages.list({ 
+        userId: 'me', 
+        q: `from:accounts@roblox.com after:${after}`,  // убери nickname из запроса
+        maxResults: 10 
+      });
     const messages = response.data.messages || [];
     const emailData = await Promise.all(messages.map(async (msg) => {
       try {
