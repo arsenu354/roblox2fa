@@ -121,7 +121,7 @@ app.use(express.json());
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  `${process.env.APP_URL}/auth/google/callback`
+  'com.dedition.robloxtwofa://oauth'  // Deep link redirect
 );
 
 app.get('/api/auth/google/url', (req: Request, res: Response) => {
@@ -162,6 +162,29 @@ app.post('/api/save-fcm-token', async (req: Request, res: Response) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed' });
+  }
+});
+
+// POST /api/auth/google/exchange — обмен code на токены
+app.post('/api/auth/google/exchange', async (req: Request, res: Response) => {
+  const { code, userId } = req.body;
+  if (!code || !userId) return res.status(400).json({ error: 'Missing fields' });
+
+  try {
+    const { tokens } = await oauth2Client.getToken(code);
+    console.log('Got tokens for user:', userId);
+
+    // Сохраняем токены в Firestore
+    await firestoreSet('users', userId, {
+      googleAccessToken: tokens.access_token || '',
+      googleRefreshToken: tokens.refresh_token || '',
+      googleTokenExpiry: tokens.expiry_date ? String(tokens.expiry_date) : '',
+    });
+
+    res.json({ ok: true });
+  } catch (err: any) {
+    console.error('OAuth exchange error:', err?.message);
+    res.status(500).json({ error: err?.message || 'Failed' });
   }
 });
 
