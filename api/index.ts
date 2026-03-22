@@ -289,4 +289,4 @@ app.post('/api/gmail/fetch', async (req: Request, res: Response) => {
   }
 });
 
-export default app;
+module.exports = serverless(app);
