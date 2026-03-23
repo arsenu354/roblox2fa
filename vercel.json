@@ -1,11 +1,6 @@
 {
-  "functions": {
-    "api/*.php": {
-      "runtime": "vercel-php@0.7.1"
-    }
-  },
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index.php" },
-    { "source": "/auth/(.*)", "destination": "/api/index.php" }
+    { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/auth/(.*)", "destination": "/api/index" }
   ]
 }
