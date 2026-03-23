@@ -6,6 +6,8 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+console.log("NEW VERSION 123");
+
 // 🔥 Firebase init (ОДИН РАЗ, безопасно)
 const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
 
