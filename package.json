@@ -9,7 +9,7 @@
     "lint": "tsc --noEmit"
   },
   "engines": {
-    "node": "24.x"
+    "node": "20.x"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
