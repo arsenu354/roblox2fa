@@ -1,14 +1,12 @@
-import express, { Request, Response } from 'express';
-import serverless from 'serverless-http';
-import { google } from 'googleapis';
-import admin from 'firebase-admin';
+const express = require('express');
+const serverless = require('serverless-http');
+const { google } = require('googleapis');
+const admin = require('firebase-admin');
 
 // Firebase init
 if (!admin.apps?.length) {
   const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
-  if (!serviceAccount) {
-    console.error("❌ FIREBASE_SERVICE_ACCOUNT is missing");
-  } else {
+  if (serviceAccount) {
     try {
       admin.initializeApp({
         credential: admin.credential.cert(JSON.parse(serviceAccount)),
@@ -17,26 +15,28 @@ if (!admin.apps?.length) {
     } catch (e) {
       console.error("❌ Firebase init error:", e);
     }
+  } else {
+    console.error("❌ FIREBASE_SERVICE_ACCOUNT missing");
   }
 }
 
 const db = admin.firestore();
 
-async function getDoc(col: string, docId: string) {
+async function getDoc(col, docId) {
   try {
     const doc = await db.collection(col).doc(docId).get();
     return doc.exists ? doc.data() : null;
   } catch (err) { return null; }
 }
 
-async function setDoc(col: string, docId: string, data: any, merge = true) {
+async function setDoc(col, docId, data, merge = true) {
   try {
     await db.collection(col).doc(docId).set(data, { merge });
     return true;
   } catch (err) { console.error('setDoc error:', err); return false; }
 }
 
-async function sendFcmPush(userId: string, username: string, code: string) {
+async function sendFcmPush(userId, username, code) {
   try {
     const tokenData = await getDoc('fcmTokens', userId);
     const token = tokenData?.android;
@@ -55,10 +55,10 @@ async function sendFcmPush(userId: string, username: string, code: string) {
       },
     });
     console.log('✅ FCM push sent');
-  } catch (err: any) { console.error('FCM error:', err?.message); }
+  } catch (err) { console.error('FCM error:', err?.message); }
 }
 
-async function addNotification(userId: string, username: string, code: string, notifId?: string) {
+async function addNotification(userId, username, code, notifId) {
   const id = notifId || Date.now().toString();
   await db.collection('notifications').doc(userId).collection('items').doc(id).set({
     username, code: String(code),
@@ -77,30 +77,27 @@ const oauth2Client = new google.auth.OAuth2(
   `${process.env.APP_URL}/auth/google/callback`
 );
 
-// Health check
-app.get('/api/health', (_req: Request, res: Response) => {
+app.get('/api/health', (req, res) => {
   res.json({ ok: true, firebase: admin.apps.length > 0 });
 });
 
-// Gmail OAuth URL
-app.get('/api/auth/google/url', (req: Request, res: Response) => {
+app.get('/api/auth/google/url', (req, res) => {
   const { userId } = req.query;
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: ['https://www.googleapis.com/auth/gmail.readonly', 'email', 'profile'],
     prompt: 'consent',
-    state: (userId as string) || '',
+    state: userId || '',
   });
   res.json({ url });
 });
 
-// Gmail OAuth Callback
-app.get('/auth/google/callback', async (req: Request, res: Response) => {
+app.get('/auth/google/callback', async (req, res) => {
   const { code, error, state } = req.query;
   if (error) return res.status(400).send(`Ошибка: ${error}`);
   try {
-    const { tokens } = await oauth2Client.getToken(code as string);
-    const userId = state as string;
+    const { tokens } = await oauth2Client.getToken(code);
+    const userId = state;
     if (userId && userId.length > 5) {
       await setDoc('users', userId, {
         googleAccessToken: tokens.access_token || '',
@@ -120,31 +117,27 @@ app.get('/auth/google/callback', async (req: Request, res: Response) => {
   }
 });
 
-// Save FCM token
-app.post('/api/save-fcm-token', async (req: Request, res: Response) => {
+app.post('/api/save-fcm-token', async (req, res) => {
   const { userId, token, platform } = req.body;
   if (!userId || !token) return res.status(400).json({ error: 'Missing fields' });
   await setDoc('fcmTokens', userId, { [platform || 'android']: token, updatedAt: new Date().toISOString() });
-  console.log(`FCM token saved: ${userId}`);
   res.json({ ok: true });
 });
 
-// Send notification
-app.post('/api/send-notification', async (req: Request, res: Response) => {
+app.post('/api/send-notification', async (req, res) => {
   const { userId, username, code } = req.body;
   if (!userId || !username || !code) return res.status(400).json({ error: 'Missing fields' });
   await addNotification(userId, username, code);
   res.json({ ok: true });
 });
 
-// Send verification code
-app.post('/api/send-verification-code', async (req: Request, res: Response) => {
+app.post('/api/send-verification-code', async (req, res) => {
   const { email, code } = req.body;
   if (!email || !code) return res.status(400).json({ error: 'Missing fields' });
   console.log(`=== VERIFICATION CODE for ${email}: ${code} ===`);
   if (process.env.RESEND_API_KEY) {
     try {
-      const { Resend } = await import('resend');
+      const { Resend } = require('resend');
       const resend = new Resend(process.env.RESEND_API_KEY);
       await resend.emails.send({
         from: process.env.RESEND_FROM || 'onboarding@resend.dev',
@@ -152,17 +145,16 @@ app.post('/api/send-verification-code', async (req: Request, res: Response) => {
         subject: 'Ваш код подтверждения — Roblox2FA',
         html: `<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#f4f4f5;border-radius:16px;"><h1 style="text-align:center">🛡 Roblox2FA</h1><div style="background:white;border-radius:12px;padding:24px;text-align:center;"><p>Код подтверждения:</p><div style="font-size:42px;font-weight:bold;letter-spacing:12px;color:#2563eb;padding:16px;background:#f0f4ff;border-radius:8px;">${code}</div><p style="color:#71717a;font-size:13px;">Действителен <strong>10 минут</strong></p></div></div>`
       });
-    } catch (err: any) { console.error('Resend error:', err?.message); }
+    } catch (err) { console.error('Resend error:', err?.message); }
   }
   res.json({ ok: true });
 });
 
-// Gmail sync background
-app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
+app.get('/api/gmail/sync-background', async (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
   try {
-    const userData = await getDoc('users', userId as string);
+    const userData = await getDoc('users', userId);
     if (!userData) return res.json({ ok: true, message: 'No user data' });
 
     const { googleAccessToken: accessToken, googleRefreshToken: refreshToken,
@@ -186,12 +178,12 @@ app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
 
     let synced = 0;
     for (const msg of messages) {
-      const details = await gmail.users.messages.get({ userId: 'me', id: msg.id! });
+      const details = await gmail.users.messages.get({ userId: 'me', id: msg.id });
       const payload = details.data.payload;
       let body = '';
-      const dec = (d: string) => Buffer.from(d.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString();
+      const dec = (d) => Buffer.from(d.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString();
       if (payload?.parts) {
-        const p = payload.parts.find((p: any) => p.mimeType === 'text/plain') || payload.parts[0];
+        const p = payload.parts.find(p => p.mimeType === 'text/plain') || payload.parts[0];
         if (p?.body?.data) body = dec(p.body.data);
       } else if (payload?.body?.data) body = dec(payload.body.data);
 
@@ -200,14 +192,14 @@ app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
       const code = codeMatch[0];
       const notifId = `gmail_${msg.id}`;
 
-      const existingNotif = await db.collection('notifications').doc(userId as string)
+      const existingNotif = await db.collection('notifications').doc(userId)
         .collection('items').doc(notifId).get();
       if (existingNotif.exists) continue;
 
       const headers = payload?.headers;
-      const subject = headers?.find((h: any) => h.name === 'Subject')?.value || 'Без темы';
-      const from = headers?.find((h: any) => h.name === 'From')?.value || 'accounts@roblox.com';
-      const date = headers?.find((h: any) => h.name === 'Date')?.value || new Date().toISOString();
+      const subject = headers?.find(h => h.name === 'Subject')?.value || 'Без темы';
+      const from = headers?.find(h => h.name === 'From')?.value || 'accounts@roblox.com';
+      const date = headers?.find(h => h.name === 'Date')?.value || new Date().toISOString();
 
       await db.collection('emails').doc(notifId).set({
         id: notifId, gmailId: msg.id, userId,
@@ -218,7 +210,7 @@ app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
         createdAt: new Date().toISOString(),
       });
 
-      await addNotification(userId as string, robloxNickname, code, notifId);
+      await addNotification(userId, robloxNickname, code, notifId);
       synced++;
     }
     res.json({ ok: true, synced });
@@ -228,12 +220,11 @@ app.get('/api/gmail/sync-background', async (req: Request, res: Response) => {
   }
 });
 
-// Check notifications
-app.get('/api/check-notifications', async (req: Request, res: Response) => {
+app.get('/api/check-notifications', async (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
   try {
-    const snapshot = await db.collection('notifications').doc(userId as string)
+    const snapshot = await db.collection('notifications').doc(userId)
       .collection('items').where('shown', '==', false)
       .orderBy('createdAt', 'desc').limit(5).get();
     const notifications = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -241,12 +232,11 @@ app.get('/api/check-notifications', async (req: Request, res: Response) => {
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// Mark notification shown
-app.post('/api/mark-notification-shown', async (req: Request, res: Response) => {
+app.post('/api/mark-notification-shown', async (req, res) => {
   const { userId, notifId } = req.body;
   if (!userId || !notifId) return res.status(400).json({ error: 'Missing fields' });
   await db.collection('notifications').doc(userId).collection('items').doc(notifId).update({ shown: true });
   res.json({ ok: true });
 });
 
-export default serverless(app);
+module.exports = serverless(app);
