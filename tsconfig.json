@@ -11,10 +11,10 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "strict": true,
+    "strict": false,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "esModuleInterop": true
   },
-  "include": ["src", "netlify/functions"]
+  "include": ["src", "api"]
 }
