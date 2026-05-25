@@ -2,10 +2,5 @@
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/auth/(.*)", "destination": "/api/index" }
-  ],
-  "functions": {
-    "api/*.ts": {
-      "runtime": "nodejs18.x"
-    }
-  }
+  ]
 }
