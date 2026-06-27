@@ -56,17 +56,15 @@ export function Auth() {
     try {
       if (isRegister) {
         // Check if nickname already exists (proactive check)
-        let nicknameSnapshot;
         try {
           const nicknameQuery = query(collection(db, 'users'), where('robloxNickname', '==', cleanNickname));
-          nicknameSnapshot = await getDocs(nicknameQuery);
-        } catch (err) {
-          handleFirestoreError(err, OperationType.LIST, 'users');
-          return; // Should not reach here as handleFirestoreError throws
-        }
-
-        if (!nicknameSnapshot.empty) {
-          throw { code: 'roblox/nickname-taken' };
+          const nicknameSnapshot = await getDocs(nicknameQuery);
+          if (!nicknameSnapshot.empty) {
+            throw { code: 'roblox/nickname-taken' };
+          }
+        } catch (err: any) {
+          if (err.code === 'roblox/nickname-taken') throw err;
+          console.warn('Nickname check skipped:', err.message);
         }
 
         // Register
