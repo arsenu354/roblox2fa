@@ -7,11 +7,7 @@ import {
 } from 'firebase/auth';
 import { 
   doc, 
-  setDoc, 
-  collection, 
-  query, 
-  where, 
-  getDocs 
+  setDoc
 } from 'firebase/firestore';
 import { ShieldCheck, User, Mail, Lock, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -55,18 +51,6 @@ export function Auth() {
 
     try {
       if (isRegister) {
-        // Check if nickname already exists (proactive check)
-        try {
-          const nicknameQuery = query(collection(db, 'users'), where('robloxNickname', '==', cleanNickname));
-          const nicknameSnapshot = await getDocs(nicknameQuery);
-          if (!nicknameSnapshot.empty) {
-            throw { code: 'roblox/nickname-taken' };
-          }
-        } catch (err: any) {
-          if (err.code === 'roblox/nickname-taken') throw err;
-          console.warn('Nickname check skipped:', err.message);
-        }
-
         // Register
         const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
         try {
